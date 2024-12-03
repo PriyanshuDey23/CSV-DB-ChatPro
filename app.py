@@ -8,43 +8,47 @@ import os
 import sqlite3
 import pandas as pd
 import google.generativeai as genai
-from prompt import *
 
-# API Key
+# API Key for Gemini Model
 genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
 
-# Function to load model
-# It will be responsible for giving the query as response
-def get_gemini_response(question, prompt):
+# Function to get Gemini response (SQL query)
+def get_gemini_response(question, prompt, table_name):
     try:
         model = genai.GenerativeModel(model_name="gemini-1.5-flash-8b")
-        response = model.generate_content([prompt[0], question])
+        # Replace table name dynamically in the prompt
+        updated_prompt = prompt.format(table_name, table_name, table_name, table_name)
+        response = model.generate_content([updated_prompt, question])
         sql_query = response.candidates[0].content.parts[0].text.strip()
         return sql_query
     except Exception as e:
-        st.error(f"Error fetching response : {e}")
+        st.error(f"Error fetching response: {e}")
         return None
 
-
-# Function to convert CSV to SQLite database
-def csv_to_sqlite(csv_path, db_path, table_name):
+# Function to convert CSV to SQLite database with dynamic table creation
+def csv_to_sqlite(csv_file, db_path, table_name):
     try:
         # Load CSV into a DataFrame
-        df = pd.read_csv(csv_path)
-        
+        df = pd.read_csv(csv_file)
+
+        # Check if DataFrame is empty
+        if df.empty:
+            st.error("CSV file is empty.")
+            return
+
         # Connect to SQLite database
         connection = sqlite3.connect(db_path)
-        
-        # Write DataFrame to SQLite table
+
+        # Write DataFrame to SQLite table (if table exists, replace it)
         df.to_sql(table_name, connection, if_exists="replace", index=False)
-        
+
         # Close connection
         connection.close()
-        
-        st.success(f"CSV file '{csv_path}' has been successfully converted to the database '{db_path}' in the table '{table_name}'.")
+
+        # Success message
+        st.success(f"CSV file '{csv_file.name}' has been successfully converted to the database '{db_path}' in the table '{table_name}'.")
     except Exception as e:
         st.error(f"Error converting CSV to database: {e}")
-
 
 # Function to retrieve query(records) from the database
 def read_sql_query(sql, db):
@@ -59,22 +63,38 @@ def read_sql_query(sql, db):
         st.error(f"Database error: {e}")
         return []
 
+# Define the Prompt (SQL query generation instructions)
+prompt = """
+You are an expert in generating SQL queries based on user requirements. 
+Your task is to create accurate, efficient, and error-free SQL queries. 
+The database contains a table named {} with the following columns: price, area, bedrooms, bathrooms, stories, mainroad, guestroom, basement, hotwaterheating, airconditioning, parking, prefarea, furnishingstatus.
+When a user asks for a specific query, generate a SQL query that satisfies their request.
+    
+Ensure the following:
+1. Do not include quotes at the beginning or end of the query.
+2. Do not use the word 'SQL' in the output.
+3. The table name is {}, unless the user specifies another table name (in which case, use the provided table name).
 
-# Define Prompt
-prompt = PROMPT
+Examples of common queries:
+- 'What is the average price of houses with 3 bedrooms?' → SELECT AVG(price) FROM {} WHERE bedrooms = 3;
+- 'How many houses have a guest room and are located near the main road?' → SELECT COUNT(*) FROM {} WHERE guestroom = 1 AND mainroad = 1;
+    
+When the user provides a complex request, ensure the query is logically sound and performs well.
+"""
 
-# Set up the Streamlit app
-st.set_page_config(page_title="Retrieve SQL Data ")
-st.header(" Retrieve SQL Data")
+# Streamlit UI setup
+st.set_page_config(page_title="Retrieve SQL Data")
+st.header("Retrieve SQL Data")
 
-# File uploader for CSV
+# File uploader for CSV file
 st.subheader("Upload CSV to Convert to Database")
 csv_file = st.file_uploader("Upload your CSV file:", type=["csv"])
 
 # Specify table and database names
-table_name = st.text_input("Enter table name:", "STUDENT")
-db_name = st.text_input("Enter database name:", "student.db")
+table_name = st.text_input("Enter table name:",placeholder="STUDENT")
+db_name = st.text_input("Enter database name:", placeholder="student.db")
 
+# If CSV file is uploaded and convert button is pressed
 if csv_file and st.button("Convert CSV to Database"):
     csv_to_sqlite(csv_file, db_name, table_name)
 
@@ -83,15 +103,15 @@ st.subheader("Query the Database")
 question = st.text_input("Input your question:", key="input")
 submit = st.button("Ask the Question")
 
-# If submit is clicked
+# If submit button is clicked
 if submit:
     try:
-        # Step 1: Get SQL Query
-        response = get_gemini_response(question, prompt)
+        # Step 1: Get SQL Query from Gemini Model
+        response = get_gemini_response(question, prompt, table_name)
         if response:
             st.write("Generated SQL Query:", response)
 
-            # Step 2: Retrieve data from database
+            # Step 2: Retrieve data from the database
             data = read_sql_query(response, db_name)
 
             # Step 3: Display results
